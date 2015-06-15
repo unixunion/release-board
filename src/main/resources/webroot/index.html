@@ -1,0 +1,699 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+
+    <!--Let browser know website is optimized for mobile-->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+
+    <script type="text/javascript" src="/js/zchart.js"></script>
+    <script type="text/javascript">
+
+    /*
+    
+    VARIABLES
+
+    */
+
+    // helper for mobile detection
+    var ismobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry/i.test(navigator.userAgent);
+
+    // client version to announce to server
+    var client_version = "v1.2.5";
+    var charts = []; // overview charts object
+    var chartCount = 0; // chart count
+    var dataLength = 40; // default graph length
+    var refresh_rate = 1000/5; // call render on flipclock and charts at this rate.
+    var chart_interval = null; // the normal plot interval, null = auto
+    var show_legend = true;
+    var logging_chance = 5; // percent chance of logging
+
+    // if desktop, set the default chart height dynamically else fix it for mobile!
+    if (!ismobile) {
+        var chart_height = window.innerHeight/3 + 'px'; // the chart height, cant use % here. :/
+    } else {
+        var chart_height = '300px';
+    }
+
+    var min_spool_plot = 100; // minimun number of message required to make the queues graph in Overview
+    var hide_counter_first_sample = true; // for "counters", hide the initial spike when refreshing view.
+    var chart_type = "stackedColumn"; // the chart_type to use ( canvasjs )
+
+    // what chart type divs exist in body, these are referenced by config
+    var chart_divs = [
+        "charts",
+        "bigcharts",
+        "smallcharts-1",
+        "smallcharts-2",
+        "smallcharts-3"
+    ]
+
+    // view data
+    var view_data;
+    // set the initial data object name to the "default" vpn.
+    var active_view = "default";
+
+
+    /*
+
+    METHODS
+
+    */
+    // percent of events to log to console
+
+
+
+    // notify user of events in UI
+    var app_status = function(msg) {
+        Materialize.toast(msg, 2500, 'z-depth-4')
+    };
+    var app_error = app_status;
+
+
+    // queues handler
+    var queues_handler = function (msg) {
+
+        var tmpDate = new Date();
+        logging = chance_of_logging;
+
+        // var data = msg.data['rpc-reply'].rpc.show.queue.queues.queue;
+
+        var data = data_shifter(msg.data, msg.config['data_path'], logging );
+
+        if (logging) {
+            console.log("queues_handler: ");
+            console.log(msg);
+        }
+
+
+        // for queue in data[]
+        for (var i in data){
+            if (charts[2].chart.options.data[i] == undefined) {
+                // console.log("queues_handler: creating initial element for " + data[i].name);
+                charts[2].chart.options.data.push(
+                    {
+                        type: chart_type,
+                        click: function(e){Materialize.toast("Fixme", 1000)},
+                        dataPoints: [],
+                        name: data[i].info['message-vpn'] + ":" + data[i].name
+                    }
+                );
+
+            } else {
+
+                if (Math.ceil(data[i].info['num-messages-spooled']) < min_spool_plot ) {
+                    var dp = {
+                        "x": tmpDate,
+                        "y": 0
+                    }
+                    charts[2].chart.options.data[i].dataPoints.push(dp);
+
+                } else {
+                    var dp = {
+                        "x": tmpDate,
+                        "y": Math.ceil(data[i].info['num-messages-spooled'])
+                    }
+                    charts[2].chart.options.data[i].dataPoints.push(dp);
+
+                }
+
+            }
+        }
+    }
+
+
+
+
+
+
+    // rudimentary UUID generator in javascript
+    function guid() {
+
+      function s4() {
+        return Math.floor((1 + Math.random()) * 0x10000)
+          .toString(16)
+          .substring(1);
+
+      }
+
+      return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
+        s4() + '-' + s4() + s4() + s4();
+
+    }
+
+    // create a uuid 
+    var uuid = guid();
+
+    // message rate
+    var target_rate;
+    var current_rate;
+
+    // states
+    var popup = false; // is the popup showing
+    var show_alarms = true; // initial show_alarms MUST be true, else icon will be out of sync
+
+    // object holders
+    var eb;
+    var reconnector;
+  
+    </script>
+
+    <!-- handlers -->
+    <script src="/js/view_controller.js"></script>
+    <script src="/js/vpns_handler.js"></script>
+    <script src="/js/generic_handler.js"></script>
+    <script src="/js/redundancy_handler.js"></script>
+    <script src="/js/alarms_handler.js"></script>
+    <script src="/js/events_handler.js"></script>
+    <script src="/js/stats_handler.js"></script>
+
+    <!-- helpers -->
+    <script src="/js/helpers.js"></script>
+
+    <!-- deps -->
+    <script src="/js/jquery.js"></script>
+    <script src="/js/canvasjs.js"></script>
+    <script src="/js/flipclock.js"></script>
+
+    <!-- css -->
+    <link rel="stylesheet" href="/css/materialize.min.css">
+    <link rel="stylesheet" href="/css/custom.min.css">
+    <link rel="stylesheet" href="/css/flipclock.css">
+    <script type="text/javascript" src="/js/materialize.min.js"></script>
+    <script type="text/javascript" src="/js/sockjs.min.js"></script>
+
+    <!-- vertx eventbus -->
+    <script src="/js/vertx.js"></script>
+
+    <!-- initial state overview -->
+    <script type="text/javascript" charset="utf-8">
+    $(document).ready(function(){
+
+        var t = getCookie("agreeterms");
+        console.log("terms: " + t);
+
+        if (!t) {
+            $('#termsandconditions').leanModal({
+                dismisable: true,
+                opacity: 10,
+            }).openModal();
+            // $('#termsandconditions').openModal();
+        } else {
+            console.log("you already agreed!");
+        }
+        
+
+        CanvasJS.addColorSet("customColorSet1",
+        [
+            "#4684ee", "#dc3912", "#ff9900", "#008000", "#666666",
+            "#4942cc", "#cb4ac5", "#d6ae00", "#336699", "#dd4477",
+            "#aaaa11", "#66aa00", "#888888", "#994499", "#dd5511",
+            "#22aa99", "#999999", "#705770", "#109618", "#a32929"
+        ]);
+
+        charts.push(new ZChart("Message Rate", dataLength, "bigcharts", chart_type, chart_interval));
+        charts[0].chart.options.data = []; // reset chart 0 first element overriding defaults
+
+        charts.push(new ZChart("Discard Delta", 10, "charts", chart_type, chart_interval));
+        charts[1].counter = true; // set counter style for Errors
+        charts[1].chart.options.data = [];
+
+        charts.push(new ZChart("Queues >" + min_spool_plot + " msgs Spooled", dataLength, "bigcharts", chart_type), chart_interval);
+        charts[2].chart.options.data = []; // reset chart 0 first element overriding defaults
+
+        // connect to eventbus
+        initialiseEventbus = function() {
+
+            if (!popup) {
+                popup = true;              
+                $('#modal1').openModal()
+            }
+
+            // if were connected kill the reconnector method
+            if (eb != null && eb.readyState() == 1) {
+                clearInterval(reconnector);
+                return;
+            };
+
+            app_status("Connecting...");
+            eb = new vertx.EventBus("/eventbus/",
+            vertxbus_ping_interval = 1000
+        );
+
+        eb.onopen = function () {
+            clearInterval(reconnector);
+            if (popup) {
+                $('#modal1').closeModal();
+                popup = false;
+            }
+
+
+            // tell the user what's what
+            app_status("Registering Handlers");
+
+
+            /*
+             * Request Config from the EventBus
+             * 
+             * first gets a list of all metrics, then asks for each ones config in turn.
+             */
+            eb.send("request-config", "all", function(msg) {
+
+                console.log("request-config: processing reply:");
+                console.log(msg);
+
+                // clean menu
+                var list = document.getElementById('metrics-dropdown');
+                while (list.hasChildNodes()) {   
+                    list.removeChild(list.firstChild);
+                }
+
+                // the overview
+                var entry = document.createElement('li');
+                newlink = document.createElement('a');
+                newlink.setAttribute('href', "#!");
+                newlink.setAttribute('class', 'waves-effect waves-teal');
+                newlink.setAttribute('onclick', "set_view('default')");
+                newlink.innerHTML="Overview";
+                entry.appendChild(newlink);
+                list.appendChild(entry);
+
+
+                // check if view_data is undefined ( reconnect condition )
+                if (view_data == undefined) {
+                    view_data = [];
+                    for (metric in msg.metrics) {
+                        console.log("registering metric config: " + msg.metrics[metric]);
+                        var c = {
+                             "name": msg.metrics[metric]
+                         }
+                         view_data[msg.metrics[metric]] = c
+                    }
+                }
+
+                // get the dropdown to append content to
+                var dropdown = document.getElementById('metrics-dropdown');
+
+                // add each metric to the menu
+                for (metric in msg.metrics) {
+
+                        // if a metric is missing ( server restart with new config condition )
+                        if ( view_data[msg.metrics[metric]] == undefined ) {
+                            app_status("New Metric: " + msg.metrics[metric] );
+                            var c = {
+                             "name": msg.metrics[metric]
+                            }
+                            view_data[msg.metrics[metric]] = c
+                        }
+
+                        // create the button
+                        var entry = document.createElement('li');
+                        newlink = document.createElement('a');
+                        newlink.setAttribute('href', "#!");
+                        newlink.setAttribute('class', 'waves-effect waves-teal');
+                        newlink.setAttribute('onclick', "set_view('" + msg.metrics[metric] + "')");
+                        newlink.innerHTML=msg.metrics[metric];
+                        entry.appendChild(newlink);
+
+                        // append to dropdown
+                        dropdown.appendChild(entry);
+
+                        // request detail config per item, setup handlers
+                        console.log("Request Config: " + msg.metrics[metric]);
+                        eb.send("request-config", msg.metrics[metric], function(reply) {
+                            console.log("Registering Handler: " + reply.topic);
+                            console.log(reply);
+                            if (reply.config.handler == undefined) {
+                                eb.registerHandler(reply.topic, generic_handler);
+                            } else {
+                                eb.registerHandler(reply.topic, window[reply.config.handler]);
+                            }
+                        })
+                    }                
+                
+            });
+
+
+            // allows the server to send special commands to THIS client
+            eb.registerHandler(uuid, function(msg) {
+                console.log("uuid message");
+                console.log(msg);
+                if (msg.action == "reload") {
+                    console.log("server demands I reload");
+                    location.reload();
+                } else if (msg.action == "broadcast") {
+                    app_status(msg.data);
+                }
+            });
+
+            // announce client to the server
+            var t = {
+                "version": client_version,
+                "uuid": uuid
+            }
+            eb.send("newclient", t);
+
+
+            // periodic pings to server
+            setInterval(function() {
+                var t = {
+                    "version": client_version,
+                    "uuid": uuid
+                }
+                eb.send("client-ping", t);
+            }, 10000);
+
+
+            // if this is a reconnect, call set_view to resubscribe, else just ignore it.
+            if (active_view != "default") {
+                set_view(active_view);
+            }
+
+        };
+
+        eb.onclose = function () {
+            app_status("Disconnected");
+            clearInterval(reconnector);
+            reconnector = setInterval(initialiseEventbus, 5000);
+            var toggle = true;
+
+        }
+        
+        // make flipclock smaller on mobile
+        if (ismobile) {
+            document.getElementById("flipclock").style.zoom = 0.5;
+            document.getElementById("flipclock").style.MozTransition = "transform: scale(0.5)";
+            toggle_legend();
+        }
+
+    }
+
+
+    initialiseEventbus();
+
+
+});
+             
+</script>
+
+</head>
+<body>
+<main>
+<div class="navbar-fixed">
+    <nav>
+        <div class="nav-wrapper blue">
+
+            <a href="#" id="app_title" class="hide-on-small-only brand-logo center">Solace Monitor</a>
+
+            <ul id="nav-fixed" class="left blue">
+                <!-- <i class="left mdi-file-cloud-done"></i> -->
+
+                <li><a class='dropdown-button' data-constrainwidth="false"  data-beloworigin="true" href='#' data-activates='metrics-dropdown'><i class="mdi-navigation-menu" data-position="bottom" data-delay="50" data-tooltip="Select a Dashboard"></i></a></li>            
+
+                <!-- chart Type  -->
+                <li><a class='dropdown-button' data-constrainwidth="false" data-beloworigin="true" href='#' data-activates='chart-type-dropdown'><i class="mdi-editor-insert-chart"></i></a></li>
+
+                <li><a class='button' onclick=toggle_alarms()><i id="nav_alarms" class="mdi-action-alarm-on"></i></a></li>
+
+
+                <!-- menu vpn-->
+                <ul id='metrics-dropdown' class='dropdown-content z-depth-2'>
+                    <li><a href="#!" class='waves-effect waves-teal' onclick=set_view("default")>Overview</a></li>
+                </ul>
+
+
+                <ul id='chart-type-dropdown' class='dropdown-content z-depth-2'>
+                    <li><a href="#!" class='waves-effect waves-teal' onclick=toggle_legend()>Legend</a></li>
+                     <li class="divider"></li>
+                    <li><a href="#!" class='waves-effect waves-teal' onclick=toggle_chart_type('stackedArea')>Area</a></li>
+                    <li><a href="#!" class='waves-effect waves-teal' onclick=toggle_chart_type('stackedColumn')>Column</a></li>
+                </ul>
+
+
+            </ul>
+        </div>
+
+    </nav>
+
+
+
+
+</div>
+
+<div style="width: 100%">
+    <div class="valign-wrapper center">
+
+        <div class="row" style="width: 100%">
+            <div class="valign center"><!--<h3 class="center-align">Solace Messages Since Go-Live</h3>-->
+                <div id="flipclock" class="h1z1-clock"></div>
+            </div>
+            <div class="row">
+                <div id="bigcharts" class="bigcharts col s12 l8 zchartContainer valign center"></div>
+                <div id="charts" class="col s12 l4 zchartContainer valign center"></div>
+            </div>
+            <div class="row">
+                <div id="smallcharts-1" class="col s12 l4 zchartContainer valign center"></div>
+                <div id="smallcharts-2" class="col s12 l4 zchartContainer valign center"></div>
+                <div id="smallcharts-3" class="col s12 l4 zchartContainer valign center"></div>
+            </row>
+        </div>
+
+                
+    </div> 
+
+
+    <!-- Modal Structure -->
+    <div id="modal1" class="modal">
+
+        <!-- <canvas id="canvas"> -->
+            <div class="modal-content">
+                <h4>Connection Lost</h4>
+                <p>reconnecting...</p>
+            </div>
+            <div class="progress">
+                <div class="indeterminate blue"></div>
+            </div>
+        <!-- </canvas> -->
+    </div>
+
+    <!-- alarm modal, if you want ot on the bottom, add class bottom-sheet  -->
+    <div id="alarmmodal" class="modal red accent-4 z-depth-4">
+        <h4>Alarms</h4>
+        <ul id="alarmscollection" class="collection"></ul>
+    </div>
+
+
+    <div id="termsandconditions" class="modal modal-fixed-footer">
+    <div class="modal-content">
+        <h4>Terms and Conditions</h4>
+
+<p align="justify">TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION</p>
+<p align="justify"><strong><a name="definitions">1. Definitions</a></strong>.</p>
+<p align="justify">"License" shall mean the terms and conditions for use, reproduction, and
+distribution as defined by Sections 1 through 9 of this document.</p>
+<p align="justify">"Licensor" shall mean the copyright owner or entity authorized by the
+copyright owner that is granting the License.</p>
+<p align="justify">"Legal Entity" shall mean the union of the acting entity and all other
+entities that control, are controlled by, or are under common control with
+that entity. For the purposes of this definition, "control" means (i) the
+power, direct or indirect, to cause the direction or management of such
+entity, whether by contract or otherwise, or (ii) ownership of fifty
+percent (50%) or more of the outstanding shares, or (iii) beneficial
+ownership of such entity.</p>
+<p align="justify">"You" (or "Your") shall mean an individual or Legal Entity exercising
+permissions granted by this License.</p>
+<p align="justify">"Source" form shall mean the preferred form for making modifications,
+including but not limited to software source code, documentation source,
+and configuration files.</p>
+<p align="justify">"Object" form shall mean any form resulting from mechanical transformation
+or translation of a Source form, including but not limited to compiled
+object code, generated documentation, and conversions to other media types.</p>
+<p align="justify">"Work" shall mean the work of authorship, whether in Source or Object form,
+made available under the License, as indicated by a copyright notice that
+is included in or attached to the work (an example is provided in the
+Appendix below).</p>
+<p align="justify">"Derivative Works" shall mean any work, whether in Source or Object form,
+that is based on (or derived from) the Work and for which the editorial
+revisions, annotations, elaborations, or other modifications represent, as
+a whole, an original work of authorship. For the purposes of this License,
+Derivative Works shall not include works that remain separable from, or
+merely link (or bind by name) to the interfaces of, the Work and Derivative
+Works thereof.</p>
+<p align="justify">"Contribution" shall mean any work of authorship, including the original
+version of the Work and any modifications or additions to that Work or
+Derivative Works thereof, that is intentionally submitted to Licensor for
+inclusion in the Work by the copyright owner or by an individual or Legal
+Entity authorized to submit on behalf of the copyright owner. For the
+purposes of this definition, "submitted" means any form of electronic,
+verbal, or written communication sent to the Licensor or its
+representatives, including but not limited to communication on electronic
+mailing lists, source code control systems, and issue tracking systems that
+are managed by, or on behalf of, the Licensor for the purpose of discussing
+and improving the Work, but excluding communication that is conspicuously
+marked or otherwise designated in writing by the copyright owner as "Not a
+Contribution."</p>
+<p align="justify">"Contributor" shall mean Licensor and any individual or Legal Entity on
+behalf of whom a Contribution has been received by Licensor and
+subsequently incorporated within the Work.</p>
+<p align="justify"><strong><a name="copyright">2. Grant of Copyright License</a></strong>. Subject to the
+terms and conditions of this License, each Contributor hereby grants to You
+a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+copyright license to reproduce, prepare Derivative Works of, publicly
+display, publicly perform, sublicense, and distribute the Work and such
+Derivative Works in Source or Object form.</p>
+<p align="justify"><strong><a name="patent">3. Grant of Patent License</a></strong>. Subject to the terms
+and conditions of this License, each Contributor hereby grants to You a
+perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+(except as stated in this section) patent license to make, have made, use,
+offer to sell, sell, import, and otherwise transfer the Work, where such
+license applies only to those patent claims licensable by such Contributor
+that are necessarily infringed by their Contribution(s) alone or by
+combination of their Contribution(s) with the Work to which such
+Contribution(s) was submitted. If You institute patent litigation against
+any entity (including a cross-claim or counterclaim in a lawsuit) alleging
+that the Work or a Contribution incorporated within the Work constitutes
+direct or contributory patent infringement, then any patent licenses
+granted to You under this License for that Work shall terminate as of the
+date such litigation is filed.</p>
+<p align="justify"><strong><a name="redistribution">4. Redistribution</a></strong>. You may reproduce and
+distribute copies of the Work or Derivative Works thereof in any medium,
+with or without modifications, and in Source or Object form, provided that
+You meet the following conditions:</p>
+<ol style="list-style: lower-latin;">
+<li align="justify">You must give any other recipients of the Work or Derivative Works a
+copy of this License; and</li>
+
+<li align="justify">You must cause any modified files to carry prominent notices stating
+that You changed the files; and</li>
+
+<li align="justify">You must retain, in the Source form of any Derivative Works that You
+distribute, all copyright, patent, trademark, and attribution notices from
+the Source form of the Work, excluding those notices that do not pertain to
+any part of the Derivative Works; and</li>
+
+<li align="justify">If the Work includes a "NOTICE" text file as part of its distribution,
+then any Derivative Works that You distribute must include a readable copy
+of the attribution notices contained within such NOTICE file, excluding
+those notices that do not pertain to any part of the Derivative Works, in
+at least one of the following places: within a NOTICE text file distributed
+as part of the Derivative Works; within the Source form or documentation,
+if provided along with the Derivative Works; or, within a display generated
+by the Derivative Works, if and wherever such third-party notices normally
+appear. The contents of the NOTICE file are for informational purposes only
+and do not modify the License. You may add Your own attribution notices
+within Derivative Works that You distribute, alongside or as an addendum to
+the NOTICE text from the Work, provided that such additional attribution
+notices cannot be construed as modifying the License.
+<br/>
+<br/>
+You may add Your own copyright statement to Your modifications and may
+provide additional or different license terms and conditions for use,
+reproduction, or distribution of Your modifications, or for any such
+Derivative Works as a whole, provided Your use, reproduction, and
+distribution of the Work otherwise complies with the conditions stated in
+this License.
+</li>
+
+</ol>
+
+<p align="justify"><strong><a name="contributions">5. Submission of Contributions</a></strong>. Unless You
+explicitly state otherwise, any Contribution intentionally submitted for
+inclusion in the Work by You to the Licensor shall be under the terms and
+conditions of this License, without any additional terms or conditions.
+Notwithstanding the above, nothing herein shall supersede or modify the
+terms of any separate license agreement you may have executed with Licensor
+regarding such Contributions.</p>
+<p align="justify"><strong><a name="trademarks">6. Trademarks</a></strong>. This License does not grant
+permission to use the trade names, trademarks, service marks, or product
+names of the Licensor, except as required for reasonable and customary use
+in describing the origin of the Work and reproducing the content of the
+NOTICE file.</p>
+<p align="justify"><strong><a name="no-warranty">7. Disclaimer of Warranty</a></strong>. Unless required by
+applicable law or agreed to in writing, Licensor provides the Work (and
+each Contributor provides its Contributions) on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied, including,
+without limitation, any warranties or conditions of TITLE,
+NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE. You
+are solely responsible for determining the appropriateness of using or
+redistributing the Work and assume any risks associated with Your exercise
+of permissions under this License.</p>
+<p align="justify"><strong><a name="no-liability">8. Limitation of Liability</a></strong>. In no event and
+under no legal theory, whether in tort (including negligence), contract, or
+otherwise, unless required by applicable law (such as deliberate and
+grossly negligent acts) or agreed to in writing, shall any Contributor be
+liable to You for damages, including any direct, indirect, special,
+incidental, or consequential damages of any character arising as a result
+of this License or out of the use or inability to use the Work (including
+but not limited to damages for loss of goodwill, work stoppage, computer
+failure or malfunction, or any and all other commercial damages or losses),
+even if such Contributor has been advised of the possibility of such
+damages.</p>
+<p align="justify"><strong><a name="additional">9. Accepting Warranty or Additional Liability</a></strong>.
+While redistributing the Work or Derivative Works thereof, You may choose
+to offer, and charge a fee for, acceptance of support, warranty, indemnity,
+or other liability obligations and/or rights consistent with this License.
+However, in accepting such obligations, You may act only on Your own behalf
+and on Your sole responsibility, not on behalf of any other Contributor,
+and only if You agree to indemnify, defend, and hold each Contributor
+harmless for any liability incurred by, or claims asserted against, such
+Contributor by reason of your accepting any such warranty or additional
+liability.</p>
+<p align="justify">END OF TERMS AND CONDITIONS</p>
+
+        </div>
+        <div class="modal-footer">
+            <a href="about:blank" class="modal-action modal-close waves-effect waves-green btn-flat">Disagree</a>
+            <a href="#!" class="modal-action modal-close waves-effect waves-red btn-flat" onclick="agreeTerns()">Agree</a>
+        </div>
+    </div>
+
+</div>
+
+
+
+</div>
+
+
+</main>
+
+
+
+<footer class="sticky-footer blue hide-on-small-only">
+    <div class="footer-copyright blue">
+        <div class="container blue grey-text text-lighten-4">
+            Copyright 2015 Kegan Holtzhausen
+            <a class="grey-text text-lighten-4 right" href="https://github.com/unixunion/solace-dashboards">Source</a>
+        </div>
+    </div>
+</footer>
+
+
+
+
+<script type="text/javascript">
+ 
+    // flipclock stuff
+    var clock = $('.h1z1-clock').FlipClock(target_rate, {
+        clockFace: 'Counter'
+    });
+
+    setTimeout(function() {
+        setInterval(function() {
+      
+            if (current_rate < target_rate ) {
+                current_rate = Math.ceil(current_rate + ((target_rate-current_rate)/refresh_rate));
+            } else {
+                current_rate = target_rate;
+            }
+      
+      
+            clock.setCounter(Math.ceil(current_rate/1000) + "K")
+        }, refresh_rate);
+    });
+
+  
+</script>
+
+
+
+</body>
+</html>
